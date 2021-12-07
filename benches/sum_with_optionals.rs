@@ -77,32 +77,26 @@ fn generate_data(count: usize, phase: usize) -> Vec<(f32, Option<Extra>)> {
     base
 }
 
-fn big_benchmark(c: &mut Criterion) {
-    let data: Vec<BigStruct> = generate_data(1000, 7)
+fn generate_big_data(count: usize, phase: usize) -> Vec<BigStruct> {
+    generate_data(count, phase)
         .into_iter()
         .map(|(number, extra)| BigStruct { number, extra })
-        .collect();
-    c.bench_function("big structs (vec)", |b| {
-        b.iter(|| sum_big(black_box(data.clone())))
-    });
+        .collect()
 }
 
-fn box_benchmark(c: &mut Criterion) {
-    let data: Vec<BoxStruct> = generate_data(1000, 7)
+fn generate_box_data(count: usize, phase: usize) -> Vec<BoxStruct> {
+    generate_data(count, phase)
         .into_iter()
         .map(|(number, extra)| BoxStruct {
             number,
             extra: extra.map(|x| Box::new(x)),
         })
-        .collect();
-    c.bench_function("boxed structs (vec)", |b| {
-        b.iter(|| sum_box(black_box(data.clone())))
-    });
+        .collect()
 }
 
-fn bare_benchmark(c: &mut Criterion) {
+fn generate_bare_data(count: usize, phase: usize) -> HVec {
     let mut data = hvec![];
-    for (number, extra) in generate_data(1000, 7) {
+    for (number, extra) in generate_data(count, phase) {
         data.push(BareStruct {
             number,
             has_extra: extra.is_some(),
@@ -111,9 +105,46 @@ fn bare_benchmark(c: &mut Criterion) {
             data.push(extra);
         }
     }
-    c.bench_function("bare structs (hvec)", |b| {
-        b.iter(|| sum_bare(black_box(data.clone())))
-    });
+    data
+}
+
+const SIZES: &'static [usize] = &[1000, 4000, 16000];
+const PHASES: &'static [usize] = &[2, 7, 131];
+
+fn big_benchmark(c: &mut Criterion) {
+    for &size in SIZES {
+        for &phase in PHASES {
+            let data = generate_big_data(size, phase);
+            c.bench_function(
+                &format!("big structs (vec, {} items, 1 in {} big)", size, phase),
+                |b| b.iter(|| sum_big(black_box(data.clone()))),
+            );
+        }
+    }
+}
+
+fn box_benchmark(c: &mut Criterion) {
+    for &size in SIZES {
+        for &phase in PHASES {
+            let data = generate_box_data(size, phase);
+            c.bench_function(
+                &format!("boxed structs (vec, {} items, 1 in {} big)", size, phase),
+                |b| b.iter(|| sum_box(black_box(data.clone()))),
+            );
+        }
+    }
+}
+
+fn bare_benchmark(c: &mut Criterion) {
+    for &size in SIZES {
+        for &phase in PHASES {
+            let data = generate_bare_data(size, phase);
+            c.bench_function(
+                &format!("bare structs (hvec, {} items, 1 in {} big)", size, phase),
+                |b| b.iter(|| sum_bare(black_box(data.clone()))),
+            );
+        }
+    }
 }
 
 criterion_group!(benches, big_benchmark, box_benchmark, bare_benchmark);
