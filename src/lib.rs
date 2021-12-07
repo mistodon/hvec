@@ -8,15 +8,17 @@
 //!
 //! Values of any type can be stored, and they are
 //! stored contiguous in memory like a normal [`Vec`] would.
+//!
 //! It supports values with a [`Drop`] implementation, however
 //! dropping the `HarrenVec` will _not_ call the destructors of
-//! the contents. To avoid leaking memory, use the
-//! [`HarrenVec::into_iter`] method and consume all of
-//! the values to ensure they are dropped.
+//! the contents. Instead you should use the
+//! [`HarrenVec::into_iter`] method to ensure you are consuming
+//! and dropping values correctly. If the values do not have
+//! destructors, this is not necessary.
 //!
-//! The intended use case for efficiently packing structs with
-//! large optional fields, while avoiding [`Box`]-ing those
-//! values.
+//! The intended use case for this data structure is
+//! efficiently packing structs with large optional fields,
+//! while avoiding [`Box`]-ing those values.
 //!
 //! # Examples
 //! ```
@@ -61,15 +63,17 @@ use std::mem::MaybeUninit;
 ///
 /// Values of any type can be stored, and they are
 /// stored contiguous in memory like a normal [`Vec`] would.
+///
 /// It supports values with a [`Drop`] implementation, however
 /// dropping the `HarrenVec` will _not_ call the destructors of
-/// the contents. To avoid leaking memory, use the
-/// [`HarrenVec::into_iter`] method and consume all of the
-/// values to ensure they are dropped.
+/// the contents. Instead you should use the
+/// [`HarrenVec::into_iter`] method to ensure you are consuming
+/// and dropping values correctly. If the values do not have
+/// destructors, this is not necessary.
 ///
-/// The intended use case for efficiently packing structs with
-/// large optional fields, while avoiding [`Box`]-ing those
-/// values.
+/// The intended use case for this data structure is
+/// efficiently packing structs with large optional fields,
+/// while avoiding [`Box`]-ing those values.
 ///
 /// # Examples
 /// ```
@@ -114,14 +118,6 @@ pub struct HarrenVec {
 
 /// Type alias for [`HarrenVec`].
 pub type HVec = HarrenVec;
-
-/// A very basic [`Iterator`]-like structure for accessing the elements
-/// of a [`HarrenVec`].
-#[derive(Debug)]
-pub struct HarrenVecIter {
-    cursor: usize,
-    vec: HarrenVec,
-}
 
 impl HarrenVec {
     /// Constructs a new empty [`HarrenVec`].
@@ -234,18 +230,18 @@ impl HarrenVec {
 
             offset = end;
         }
-        unsafe { other.clear() }
+        other.clear();
     }
 
     /// Clears the contents of the `HarrenVec`.
     ///
     /// # Safety
     ///
-    /// This method is unsafe because it will not call the
+    /// While this method is not unsafe, it will not call the
     /// destructors of any of its contents. If the contents
-    /// do not have a [`Drop`] implementation, this method is
-    /// safe.
-    pub unsafe fn clear(&mut self) {
+    /// do not have a [`Drop`] implementation, this is not a
+    /// concern.
+    pub fn clear(&mut self) {
         self.types.clear();
         self.indices.clear();
         self.backing.clear();
@@ -256,11 +252,11 @@ impl HarrenVec {
     ///
     /// # Safety
     ///
-    /// This method is unsafe because it will not call the
+    /// While this method is not unsafe, it will not call the
     /// destructors of any of its contents. If the contents
-    /// do not have a [`Drop`] implementation, this method is
-    /// safe.
-    pub unsafe fn truncate(&mut self, items: usize) {
+    /// do not have a [`Drop`] implementation, this is not a
+    /// concern.
+    pub fn truncate(&mut self, items: usize) {
         if let Some(last_index) = self.indices.get(items).copied() {
             self.types.truncate(items);
             self.indices.truncate(items);
@@ -383,8 +379,30 @@ impl HarrenVec {
     /// assert_eq!(total, 100500);
     /// ```
     #[allow(clippy::should_implement_trait)]
-    pub fn into_iter(self) -> HarrenVecIter {
-        HarrenVecIter {
+    pub fn into_iter(self) -> HarrenIter {
+        HarrenIter {
+            cursor: 0,
+            vec: self,
+        }
+    }
+
+    /// Returns an Iterator-like structure for stepping through immutable references to
+    /// the contents of the `HarrenVec`.
+    ///
+    /// See [`HarrenVec::into_iter`] for examples.
+    pub fn iter(&self) -> HarrenRefIter {
+        HarrenRefIter {
+            cursor: 0,
+            vec: self,
+        }
+    }
+
+    /// Returns an Iterator-like structure for stepping through mutable references to
+    /// the contents of the `HarrenVec`.
+    ///
+    /// See [`HarrenVec::into_iter`] for examples.
+    pub fn iter_mut(&mut self) -> HarrenMutIter {
+        HarrenMutIter {
             cursor: 0,
             vec: self,
         }
@@ -619,7 +637,15 @@ impl HarrenVec {
     }
 }
 
-impl HarrenVecIter {
+/// An [`Iterator`]-like structure for taking
+/// ownership of the elements of a [`HarrenVec`].
+#[derive(Debug)]
+pub struct HarrenIter {
+    cursor: usize,
+    vec: HarrenVec,
+}
+
+impl HarrenIter {
     /// Checks the type of the next item in the iterator
     /// without actually advancing it.
     ///
@@ -665,6 +691,136 @@ impl HarrenVecIter {
 
         let index = self.vec.indices[self.cursor];
         let result = unsafe { self.vec.take_at::<T>(index) };
+        self.cursor += 1;
+        Some(result)
+    }
+
+    /// Returns true if there are no more elements in the
+    /// iterator.
+    pub fn is_empty(&self) -> bool {
+        self.cursor >= self.vec.len()
+    }
+}
+
+/// An [`Iterator`]-like structure for immutably borrowing
+/// the elements of a [`HarrenVec`].
+#[derive(Debug)]
+pub struct HarrenRefIter<'a> {
+    cursor: usize,
+    vec: &'a HarrenVec,
+}
+
+impl<'a> HarrenRefIter<'a> {
+    /// Checks the type of the next item in the iterator
+    /// without actually advancing it.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::any::TypeId;
+    /// use hvec::hvec;
+    ///
+    /// let list = hvec![1_u64, 2_i32];
+    /// let mut iter = list.into_iter();
+    /// assert_eq!(iter.peek_type(), Some(TypeId::of::<u64>()));
+    /// ```
+    pub fn peek_type(&self) -> Option<TypeId> {
+        self.vec.types.get(self.cursor).copied()
+    }
+
+    /// Advances the iterator and returns the next item if
+    /// one exists - or else None.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the actual type of the item
+    /// differs from the `T` that this method was called with.
+    ///
+    /// # Examples
+    /// ```
+    /// use hvec::hvec;
+    ///
+    /// let list = hvec![1_u64, 2_i32];
+    /// let mut iter = list.into_iter();
+    /// assert_eq!(iter.next::<u64>(), Some(1_u64));
+    /// assert_eq!(iter.next::<i32>(), Some(2_i32));
+    /// assert_eq!(iter.next::<()>(), None);
+    /// ```
+    #[allow(clippy::should_implement_trait)]
+    pub fn next<T: 'static>(&mut self) -> Option<&T> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let type_id = self.vec.types[self.cursor];
+        assert_eq!(type_id, TypeId::of::<T>());
+
+        let index = self.vec.indices[self.cursor];
+        let result = unsafe { self.vec.ref_at::<T>(index) };
+        self.cursor += 1;
+        Some(result)
+    }
+
+    /// Returns true if there are no more elements in the
+    /// iterator.
+    pub fn is_empty(&self) -> bool {
+        self.cursor >= self.vec.len()
+    }
+}
+
+/// An [`Iterator`]-like structure for mutably borrowing
+/// the elements of a [`HarrenVec`].
+#[derive(Debug)]
+pub struct HarrenMutIter<'a> {
+    cursor: usize,
+    vec: &'a mut HarrenVec,
+}
+
+impl<'a> HarrenMutIter<'a> {
+    /// Checks the type of the next item in the iterator
+    /// without actually advancing it.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::any::TypeId;
+    /// use hvec::hvec;
+    ///
+    /// let list = hvec![1_u64, 2_i32];
+    /// let mut iter = list.into_iter();
+    /// assert_eq!(iter.peek_type(), Some(TypeId::of::<u64>()));
+    /// ```
+    pub fn peek_type(&self) -> Option<TypeId> {
+        self.vec.types.get(self.cursor).copied()
+    }
+
+    /// Advances the iterator and returns the next item if
+    /// one exists - or else None.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the actual type of the item
+    /// differs from the `T` that this method was called with.
+    ///
+    /// # Examples
+    /// ```
+    /// use hvec::hvec;
+    ///
+    /// let list = hvec![1_u64, 2_i32];
+    /// let mut iter = list.into_iter();
+    /// assert_eq!(iter.next::<u64>(), Some(1_u64));
+    /// assert_eq!(iter.next::<i32>(), Some(2_i32));
+    /// assert_eq!(iter.next::<()>(), None);
+    /// ```
+    #[allow(clippy::should_implement_trait)]
+    pub fn next<T: 'static>(&mut self) -> Option<&mut T> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let type_id = self.vec.types[self.cursor];
+        assert_eq!(type_id, TypeId::of::<T>());
+
+        let index = self.vec.indices[self.cursor];
+        let result = unsafe { self.vec.mut_ref_at::<T>(index) };
         self.cursor += 1;
         Some(result)
     }
@@ -775,12 +931,10 @@ mod tests {
         assert!(!list.is_empty());
         assert_eq!(list.len(), 4);
 
-        unsafe {
-            list.truncate(2);
-            assert_eq!(list.len(), 2);
-            list.clear();
-            assert_eq!(list.len(), 0);
-        }
+        list.truncate(2);
+        assert_eq!(list.len(), 2);
+        list.clear();
+        assert_eq!(list.len(), 0);
 
         assert!(list.is_empty());
     }
@@ -905,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn iter() {
+    fn into_iter() {
         let mut list = HarrenVec::new();
         list.push(1_usize);
         list.push(2_u8);
@@ -916,6 +1070,34 @@ mod tests {
         assert_eq!(items.next::<usize>(), Some(1));
         assert_eq!(items.next::<u8>(), Some(2));
         assert_eq!(items.next::<String>(), Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn iter() {
+        let mut list = HarrenVec::new();
+        list.push(1_usize);
+        list.push(2_u8);
+        list.push("Hello".to_string());
+
+        let mut items = list.iter();
+        assert_eq!(items.peek_type(), Some(TypeId::of::<usize>()));
+        assert_eq!(items.next::<usize>(), Some(&1));
+        assert_eq!(items.next::<u8>(), Some(&2));
+        assert_eq!(items.next::<String>(), Some(&"Hello".to_string()));
+    }
+
+    #[test]
+    fn iter_mut() {
+        let mut list = HarrenVec::new();
+        list.push(1_usize);
+        list.push(2_u8);
+        list.push("Hello".to_string());
+
+        let mut items = list.iter_mut();
+        assert_eq!(items.peek_type(), Some(TypeId::of::<usize>()));
+        assert_eq!(items.next::<usize>(), Some(&mut 1));
+        assert_eq!(items.next::<u8>(), Some(&mut 2));
+        assert_eq!(items.next::<String>(), Some(&mut "Hello".to_string()));
     }
 
     #[test]
