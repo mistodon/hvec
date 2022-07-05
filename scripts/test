@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -eu
+set -o pipefail
+
+cargo check
+cargo test
+cargo clippy -- -D clippy::all
+cargo check --features no_drop
+cargo test --features no_drop
+cargo clippy --features no_drop -- -D clippy::all
+cargo fmt --check

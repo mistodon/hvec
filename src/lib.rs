@@ -9,16 +9,18 @@
 //! Values of any type can be stored, and they are
 //! stored contiguous in memory like a normal [`Vec`] would.
 //!
-//! It supports values with a [`Drop`] implementation, however
+//! The intended use case for this data structure is
+//! efficiently packing structs with large optional fields,
+//! while avoiding [`Box`]-ing those values.
+//!
+//! It supports values with a [`Drop`] implementation by default.
+//!
+//! However, if you include the `no_drop` feature, then
 //! dropping the `HarrenVec` will _not_ call the destructors of
 //! the contents. Instead you should use the
 //! [`HarrenVec::into_iter`] method to ensure you are consuming
 //! and dropping values correctly. If the values do not have
 //! destructors, this is not necessary.
-//!
-//! The intended use case for this data structure is
-//! efficiently packing structs with large optional fields,
-//! while avoiding [`Box`]-ing those values.
 //!
 //! # Examples
 //! ```
@@ -58,22 +60,60 @@
 use std::any::TypeId;
 use std::mem::MaybeUninit;
 
+#[cfg(not(feature = "no_drop"))]
+use std::{cell::RefCell, collections::HashMap};
+
+#[cfg(not(feature = "no_drop"))]
+type Destructor = Box<dyn Fn(*const ())>;
+
+#[cfg(not(feature = "no_drop"))]
+thread_local! {
+    static DESTRUCTORS: RefCell<HashMap<TypeId, Destructor>> = RefCell::new(HashMap::new());
+}
+
+#[cfg(not(feature = "no_drop"))]
+fn register_destructor<T: 'static>() {
+    DESTRUCTORS.with(|destructors| {
+        let mut destructors = destructors.borrow_mut();
+        let type_id = TypeId::of::<T>();
+        destructors.entry(type_id).or_insert_with(|| {
+            Box::new(|ptr: *const ()| {
+                let ptr = ptr as *const T;
+                unsafe {
+                    ptr.read();
+                }
+            })
+        });
+    });
+}
+
+#[cfg(not(feature = "no_drop"))]
+fn run_destructor(type_id: TypeId, ptr: *const ()) {
+    DESTRUCTORS.with(|destructors| {
+        let destructors = destructors.borrow();
+        let destructor = &destructors[&type_id];
+        destructor(ptr);
+    });
+}
+
 /// A [`Vec`]-like data structure that can store items
 /// of different types and sizes from each other.
 ///
 /// Values of any type can be stored, and they are
 /// stored contiguous in memory like a normal [`Vec`] would.
 ///
-/// It supports values with a [`Drop`] implementation, however
+/// The intended use case for this data structure is
+/// efficiently packing structs with large optional fields,
+/// while avoiding [`Box`]-ing those values.
+///
+/// It supports values with a [`Drop`] implementation by default.
+///
+/// However, if you include the `no_drop` feature, then
 /// dropping the `HarrenVec` will _not_ call the destructors of
 /// the contents. Instead you should use the
 /// [`HarrenVec::into_iter`] method to ensure you are consuming
 /// and dropping values correctly. If the values do not have
 /// destructors, this is not necessary.
-///
-/// The intended use case for this data structure is
-/// efficiently packing structs with large optional fields,
-/// while avoiding [`Box`]-ing those values.
 ///
 /// # Examples
 /// ```
@@ -230,18 +270,27 @@ impl HarrenVec {
 
             offset = end;
         }
-        other.clear();
+        other.clear_without_drop();
     }
 
     /// Clears the contents of the `HarrenVec`.
     ///
-    /// # Safety
+    /// (Note that if the `no_drop` feature is enabled, then
+    /// this method will not call the destructors of any of its contents.
     ///
-    /// While this method is not unsafe, it will not call the
-    /// destructors of any of its contents. If the contents
-    /// do not have a [`Drop`] implementation, this is not a
-    /// concern.
+    /// If the contents do not have a [`Drop`] implementation, this is not a
+    /// concern.)
     pub fn clear(&mut self) {
+        #[cfg(not(feature = "no_drop"))]
+        {
+            for i in 0..self.len() {
+                self.drop_item(i);
+            }
+        }
+        self.clear_without_drop();
+    }
+
+    fn clear_without_drop(&mut self) {
         self.types.clear();
         self.indices.clear();
         self.backing.clear();
@@ -250,13 +299,21 @@ impl HarrenVec {
     /// Truncates the contents of the `HarrenVec` to a set
     /// number of items, clearing the rest.
     ///
-    /// # Safety
+    /// (Note that if the `no_drop` feature is enabled, then
+    /// this method will not call the destructors of any of its contents.
     ///
-    /// While this method is not unsafe, it will not call the
-    /// destructors of any of its contents. If the contents
-    /// do not have a [`Drop`] implementation, this is not a
-    /// concern.
+    /// If the contents do not have a [`Drop`] implementation, this is not a
+    /// concern.)
     pub fn truncate(&mut self, items: usize) {
+        #[cfg(not(feature = "no_drop"))]
+        {
+            let end = items + 1;
+            if end < self.len() {
+                for i in end..self.len() {
+                    self.drop_item(i);
+                }
+            }
+        }
         if let Some(last_index) = self.indices.get(items).copied() {
             self.types.truncate(items);
             self.indices.truncate(items);
@@ -316,7 +373,7 @@ impl HarrenVec {
 
     /// Returns the total number of bytes occupied by the
     /// contents of the `HarrenVec`.
-    pub fn bytes(&self) -> usize {
+    pub fn bytes_len(&self) -> usize {
         self.backing.len()
     }
 
@@ -427,6 +484,10 @@ impl HarrenVec {
         self.indices.push(self.backing.len());
         self.backing.extend_from_slice(bytes);
         self.types.push(type_id);
+
+        #[cfg(not(feature = "no_drop"))]
+        register_destructor::<T>();
+
         std::mem::forget(t);
     }
 
@@ -470,6 +531,14 @@ impl HarrenVec {
         let dest = result.as_mut_ptr();
         dest.copy_from(ptr, 1);
         result.assume_init()
+    }
+
+    #[cfg(not(feature = "no_drop"))]
+    fn drop_item(&mut self, index: usize) {
+        let type_id = self.types[index];
+        let offset = self.indices[index];
+        let ptr = &self.backing[offset] as *const u8 as *const ();
+        run_destructor(type_id, ptr);
     }
 
     /// Returns true if this `HarrenVec` contains the element.
@@ -637,8 +706,23 @@ impl HarrenVec {
     }
 }
 
+#[cfg(not(feature = "no_drop"))]
+impl Drop for HarrenVec {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 /// An [`Iterator`]-like structure for taking
 /// ownership of the elements of a [`HarrenVec`].
+///
+/// (Note that if the `no_drop` feature is enabled, then
+/// this iterator will not call the destructors of any of its contents
+/// when dropped. Instead you should use the `next` method to ensure
+/// you are consuming and dropping each value.
+///
+/// If the contents do not have a [`Drop`] implementation, this is not a
+/// concern.)
 #[derive(Debug)]
 pub struct HarrenIter {
     cursor: usize,
@@ -699,6 +783,18 @@ impl HarrenIter {
     /// iterator.
     pub fn is_empty(&self) -> bool {
         self.cursor >= self.vec.len()
+    }
+}
+
+#[cfg(not(feature = "no_drop"))]
+impl Drop for HarrenIter {
+    fn drop(&mut self) {
+        if !self.is_empty() {
+            for i in self.cursor..self.vec.len() {
+                self.vec.drop_item(i);
+            }
+        }
+        self.vec.clear_without_drop();
     }
 }
 
