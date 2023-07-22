@@ -61,39 +61,18 @@ use std::any::TypeId;
 use std::mem::MaybeUninit;
 
 #[cfg(not(feature = "no_drop"))]
-use std::{cell::RefCell, collections::HashMap};
+use std::collections::HashMap;
 
 #[cfg(not(feature = "no_drop"))]
-type Destructor = Box<dyn Fn(*const ())>;
-
-#[cfg(not(feature = "no_drop"))]
-thread_local! {
-    static DESTRUCTORS: RefCell<HashMap<TypeId, Destructor>> = RefCell::new(HashMap::new());
+fn generic_drop<T>(p: *const ()) {
+    let p = p as *const T;
+    let _ = unsafe { p.read() };
 }
 
 #[cfg(not(feature = "no_drop"))]
-fn register_destructor<T: 'static>() {
-    DESTRUCTORS.with(|destructors| {
-        let mut destructors = destructors.borrow_mut();
-        let type_id = TypeId::of::<T>();
-        destructors.entry(type_id).or_insert_with(|| {
-            Box::new(|ptr: *const ()| {
-                let ptr = ptr as *const T;
-                unsafe {
-                    ptr.read();
-                }
-            })
-        });
-    });
-}
-
-#[cfg(not(feature = "no_drop"))]
-fn run_destructor(type_id: TypeId, ptr: *const ()) {
-    DESTRUCTORS.with(|destructors| {
-        let destructors = destructors.borrow();
-        let destructor = &destructors[&type_id];
-        destructor(ptr);
-    });
+fn drop_fn_ptr<T>() -> *const () {
+    let f: fn(*const ()) = generic_drop::<T>;
+    f as _
 }
 
 /// A [`Vec`]-like data structure that can store items
@@ -149,11 +128,29 @@ fn run_destructor(type_id: TypeId, ptr: *const ()) {
 /// // extra data = [[0., 0., 0., 0.], [0., 0., 0., 0.], [0., 0., 0., 0.], [0., 0., 0., 0.]]
 /// // id = 2
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct HarrenVec {
     types: Vec<TypeId>,
     indices: Vec<usize>,
     backing: Vec<u8>,
+    max_align: usize,
+
+    #[cfg(not(feature = "no_drop"))]
+    destructors: HashMap<TypeId, *const ()>,
+}
+
+impl Default for HarrenVec {
+    fn default() -> Self {
+        HarrenVec {
+            types: Default::default(),
+            indices: Default::default(),
+            backing: Default::default(),
+            max_align: 1,
+
+            #[cfg(not(feature = "no_drop"))]
+            destructors: HashMap::default(),
+        }
+    }
 }
 
 /// Type alias for [`HarrenVec`].
@@ -190,7 +187,25 @@ impl HarrenVec {
             types: Vec::with_capacity(items),
             indices: Vec::with_capacity(items),
             backing: Vec::with_capacity(bytes),
+            max_align: 1,
+
+            #[cfg(not(feature = "no_drop"))]
+            destructors: HashMap::default(),
         }
+    }
+
+    #[cfg(not(feature = "no_drop"))]
+    fn register_destructor<T: 'static>(&mut self) {
+        let type_id = TypeId::of::<T>();
+        let drop_fn_p = drop_fn_ptr::<T>();
+        self.destructors.entry(type_id).or_insert(drop_fn_p);
+    }
+
+    #[cfg(not(feature = "no_drop"))]
+    fn run_destructor(&self, type_id: TypeId, ptr: *const ()) {
+        let drop_fn_p = self.destructors[&type_id];
+        let drop_fn: fn(*const ()) = unsafe { std::mem::transmute(drop_fn_p) };
+        drop_fn(ptr);
     }
 
     /// Reserve capacity for at least `items` more items and
@@ -243,6 +258,13 @@ impl HarrenVec {
         Ok(())
     }
 
+    fn pad_to_align(&mut self, align: usize) {
+        let padding = (align - (self.backing.len() % align)) % align;
+        for _ in 0..padding {
+            self.backing.push(0);
+        }
+    }
+
     /// Move all elements from another `HarrenVec` into
     /// this one, leaving the `other` empty.
     ///
@@ -256,6 +278,8 @@ impl HarrenVec {
     /// assert_eq!(b.len(), 0);
     /// ```
     pub fn append(&mut self, other: &mut HarrenVec) {
+        self.pad_to_align(other.max_align);
+
         let mut offset = 0;
         for i in 0..other.len() {
             let end = other
@@ -270,6 +294,14 @@ impl HarrenVec {
 
             offset = end;
         }
+
+        #[cfg(not(feature = "no_drop"))]
+        {
+            for (type_id, drop_fn) in other.destructors.drain() {
+                self.destructors.insert(type_id, drop_fn);
+            }
+        }
+
         other.clear_without_drop();
     }
 
@@ -481,12 +513,17 @@ impl HarrenVec {
         let ptr = &t as *const T as *const u8;
         let size = std::mem::size_of::<T>();
         let bytes = unsafe { std::slice::from_raw_parts(ptr, size) };
+
+        let align = std::mem::align_of::<T>();
+        self.max_align = std::cmp::max(self.max_align, align);
+        self.pad_to_align(align);
+
         self.indices.push(self.backing.len());
         self.backing.extend_from_slice(bytes);
         self.types.push(type_id);
 
         #[cfg(not(feature = "no_drop"))]
-        register_destructor::<T>();
+        self.register_destructor::<T>();
 
         std::mem::forget(t);
     }
@@ -538,7 +575,7 @@ impl HarrenVec {
         let type_id = self.types[index];
         let offset = self.indices[index];
         let ptr = &self.backing[offset] as *const u8 as *const ();
-        run_destructor(type_id, ptr);
+        self.run_destructor(type_id, ptr);
     }
 
     /// Returns true if this `HarrenVec` contains the element.
@@ -1233,5 +1270,67 @@ mod tests {
         }
 
         assert_eq!(log, "01Hello2");
+    }
+}
+
+#[cfg(all(test, feature = "no_drop"))]
+mod dropless_tests {
+    use super::*;
+
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn contents_not_dropped_when_vec_dropped() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let counter = DropCounter(Arc::clone(&count));
+
+        {
+            let mut list = HarrenVec::new();
+            list.push(counter);
+        }
+
+        assert_eq!(count.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[cfg(all(test, not(feature = "no_drop")))]
+mod droptests {
+    use super::*;
+
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn contents_dropped_when_vec_dropped() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let counter = DropCounter(Arc::clone(&count));
+
+        {
+            let mut list = HarrenVec::new();
+            list.push(counter);
+        }
+
+        assert_eq!(count.load(Ordering::Relaxed), 1);
     }
 }

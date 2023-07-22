@@ -1,6 +1,6 @@
 [package]
 name = "hvec"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Vi <violet@hey.com>"]
 edition = "2021"
 description = "A Vec-like structure that can store different types of different sizes contiguous with each other in memory."
