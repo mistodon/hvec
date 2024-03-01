@@ -532,6 +532,8 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the actual element is not an
     /// element of the specified type `T`.
     ///
@@ -545,8 +547,24 @@ impl HarrenVec {
     pub fn pop<T: 'static>(&mut self) -> Option<T> {
         self.types.pop().map(|type_id| {
             let index = self.indices.pop().unwrap();
+
+            #[cfg(feature = "type_assertions")]
             assert_eq!(TypeId::of::<T>(), type_id);
 
+            let result = unsafe { self.take_at::<T>(index) };
+            self.backing.truncate(index);
+            result
+        })
+    }
+
+    /// See [`Self::pop`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn pop_unchecked<T: 'static>(&mut self) -> Option<T> {
+        self.types.pop().map(|_| {
+            let index = self.indices.pop().unwrap();
             let result = unsafe { self.take_at::<T>(index) };
             self.backing.truncate(index);
             result
@@ -604,10 +622,23 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the item is not of the specified
     /// type `T`.
     pub fn first<T: 'static>(&self) -> Option<&T> {
+        #[cfg(feature = "type_assertions")]
         assert_eq!(Some(&TypeId::of::<T>()), self.types.first());
+
+        unsafe { self.first_unchecked::<T>() }
+    }
+
+    /// See [`Self::first`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn first_unchecked<T: 'static>(&self) -> Option<&T> {
         self.indices
             .first()
             .copied()
@@ -619,10 +650,23 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the item is not of the specified
     /// type `T`.
     pub fn first_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        #[cfg(feature = "type_assertions")]
         assert_eq!(Some(&TypeId::of::<T>()), self.types.first());
+
+        unsafe { self.first_mut_unchecked() }
+    }
+
+    /// See [`Self::first_mut`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn first_mut_unchecked<T: 'static>(&mut self) -> Option<&mut T> {
         self.indices
             .first()
             .copied()
@@ -633,10 +677,23 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the item is not of the specified
     /// type `T`.
     pub fn last<T: 'static>(&self) -> Option<&T> {
+        #[cfg(feature = "type_assertions")]
         assert_eq!(Some(&TypeId::of::<T>()), self.types.last());
+
+        unsafe { self.last_unchecked() }
+    }
+
+    /// See [`Self::last`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn last_unchecked<T: 'static>(&self) -> Option<&T> {
         self.indices
             .last()
             .copied()
@@ -648,24 +705,63 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the item is not of the specified
     /// type `T`.
     pub fn last_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        #[cfg(feature = "type_assertions")]
         assert_eq!(Some(&TypeId::of::<T>()), self.types.last());
+
+        unsafe { self.last_mut_unchecked() }
+    }
+
+    /// See [`Self::last_mut`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn last_mut_unchecked<T: 'static>(&mut self) -> Option<&mut T> {
         self.indices
             .last()
             .copied()
             .map(|i| unsafe { self.mut_ref_at::<T>(i) })
     }
 
-    /// Alias of the `HarrenVec::last` method.
+    /// Alias of the [`Self::last`] method.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
     pub fn peek<T: 'static>(&self) -> Option<&T> {
         self.last()
     }
 
-    /// Alias of the `HarrenVec::last_mut` method.
+    /// Alias of the [`Self::last_unchecked`] method.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn peek_unchecked<T: 'static>(&self) -> Option<&T> {
+        self.last_unchecked()
+    }
+
+    /// Alias of the [`Self::last_mut`] method.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
     pub fn peek_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.last_mut()
+    }
+
+    /// Alias of the [`Self::last_mut_unchecked`] method.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn peek_mut_unchecked<T: 'static>(&mut self) -> Option<&mut T> {
+        self.last_mut_unchecked()
     }
 
     /// Return a reference to the item of the `HarrenVec` at
@@ -673,10 +769,23 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the item is not of the specified
     /// type `T`.
     pub fn get<T: 'static>(&self, index: usize) -> Option<&T> {
+        #[cfg(feature = "type_assertions")]
         assert_eq!(Some(&TypeId::of::<T>()), self.types.get(index));
+
+        unsafe { self.get_unchecked(index) }
+    }
+
+    /// See [`Self::get`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn get_unchecked<T: 'static>(&self, index: usize) -> Option<&T> {
         self.indices
             .get(index)
             .copied()
@@ -688,10 +797,23 @@ impl HarrenVec {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method panics if the item is not of the specified
     /// type `T`.
     pub fn get_mut<T: 'static>(&mut self, index: usize) -> Option<&mut T> {
+        #[cfg(feature = "type_assertions")]
         assert_eq!(Some(&TypeId::of::<T>()), self.types.get(index));
+
+        unsafe { self.get_mut_unchecked(index) }
+    }
+
+    /// See [`Self::get_mut`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn get_mut_unchecked<T: 'static>(&mut self, index: usize) -> Option<&mut T> {
         self.indices
             .get(index)
             .copied()
@@ -788,6 +910,8 @@ impl HarrenIter {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method will panic if the actual type of the item
     /// differs from the `T` that this method was called with.
     ///
@@ -803,12 +927,29 @@ impl HarrenIter {
     /// ```
     #[allow(clippy::should_implement_trait)]
     pub fn next<T: 'static>(&mut self) -> Option<T> {
+        // TODO: Messy checking this twice
         if self.is_empty() {
             return None;
         }
 
-        let type_id = self.vec.types[self.cursor];
-        assert_eq!(type_id, TypeId::of::<T>());
+        #[cfg(feature = "type_assertions")]
+        {
+            let type_id = self.vec.types[self.cursor];
+            assert_eq!(type_id, TypeId::of::<T>());
+        }
+
+        unsafe { self.next_unchecked() }
+    }
+
+    /// See [`Self::next`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn next_unchecked<T: 'static>(&mut self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
 
         let index = self.vec.indices[self.cursor];
         let result = unsafe { self.vec.take_at::<T>(index) };
@@ -865,6 +1006,8 @@ impl<'a> HarrenRefIter<'a> {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method will panic if the actual type of the item
     /// differs from the `T` that this method was called with.
     ///
@@ -880,12 +1023,29 @@ impl<'a> HarrenRefIter<'a> {
     /// ```
     #[allow(clippy::should_implement_trait)]
     pub fn next<T: 'static>(&mut self) -> Option<&T> {
+        // TODO: Messy checking this twice
         if self.is_empty() {
             return None;
         }
 
-        let type_id = self.vec.types[self.cursor];
-        assert_eq!(type_id, TypeId::of::<T>());
+        #[cfg(feature = "type_assertions")]
+        {
+            let type_id = self.vec.types[self.cursor];
+            assert_eq!(type_id, TypeId::of::<T>());
+        }
+
+        unsafe { self.next_unchecked() }
+    }
+
+    /// See [`Self::next`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn next_unchecked<T: 'static>(&mut self) -> Option<&T> {
+        if self.is_empty() {
+            return None;
+        }
 
         let index = self.vec.indices[self.cursor];
         let result = unsafe { self.vec.ref_at::<T>(index) };
@@ -930,6 +1090,8 @@ impl<'a> HarrenMutIter<'a> {
     ///
     /// # Panics
     ///
+    /// (This method can only panic if the `type_assertions` feature flag is enabled.)
+    ///
     /// This method will panic if the actual type of the item
     /// differs from the `T` that this method was called with.
     ///
@@ -945,12 +1107,29 @@ impl<'a> HarrenMutIter<'a> {
     /// ```
     #[allow(clippy::should_implement_trait)]
     pub fn next<T: 'static>(&mut self) -> Option<&mut T> {
+        // TODO: Messy checking this twice
         if self.is_empty() {
             return None;
         }
 
-        let type_id = self.vec.types[self.cursor];
-        assert_eq!(type_id, TypeId::of::<T>());
+        #[cfg(feature = "type_assertions")]
+        {
+            let type_id = self.vec.types[self.cursor];
+            assert_eq!(type_id, TypeId::of::<T>());
+        }
+
+        unsafe { self.next_unchecked() }
+    }
+
+    /// See [`Self::next`]. Does not panic if the type doesn't match.
+    ///
+    /// # Safety
+    ///
+    /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
+    pub unsafe fn next_unchecked<T: 'static>(&mut self) -> Option<&mut T> {
+        if self.is_empty() {
+            return None;
+        }
 
         let index = self.vec.indices[self.cursor];
         let result = unsafe { self.vec.mut_ref_at::<T>(index) };
