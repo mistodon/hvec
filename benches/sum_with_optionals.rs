@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use hvec::{hvec, HVec};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use hvec::{HVec, hvec};
 
 #[derive(Clone)]
 struct BigStruct {

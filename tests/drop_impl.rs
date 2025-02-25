@@ -5,6 +5,7 @@ pub fn push_and_drop_runs_destructors() {
 
     static mut A_COUNT: u8 = 0;
     static mut B_COUNT: u8 = 0;
+    static mut C_COUNT: u8 = 0;
 
     struct A(u8);
     struct B(u8);
@@ -14,6 +15,7 @@ pub fn push_and_drop_runs_destructors() {
             unsafe {
                 let x = A_COUNT;
                 A_COUNT += 1;
+                C_COUNT += x;
                 A(x)
             }
         }
@@ -22,6 +24,7 @@ pub fn push_and_drop_runs_destructors() {
         fn drop(&mut self) {
             unsafe {
                 A_COUNT -= 1;
+                C_COUNT -= self.0;
             }
         }
     }
@@ -31,6 +34,7 @@ pub fn push_and_drop_runs_destructors() {
             unsafe {
                 let x = B_COUNT;
                 B_COUNT += 1;
+                C_COUNT += x;
                 B(x)
             }
         }
@@ -39,6 +43,7 @@ pub fn push_and_drop_runs_destructors() {
         fn drop(&mut self) {
             unsafe {
                 B_COUNT -= 1;
+                C_COUNT -= self.0;
             }
         }
     }
@@ -61,7 +66,11 @@ pub fn push_and_drop_runs_destructors() {
     }
 
     unsafe {
-        assert_eq!(A_COUNT, 0);
-        assert_eq!(B_COUNT, 0);
+        let a_count: u8 = A_COUNT;
+        let b_count: u8 = B_COUNT;
+        let c_count: u8 = C_COUNT;
+        assert_eq!(a_count, 0);
+        assert_eq!(b_count, 0);
+        assert_eq!(c_count, 0);
     }
 }

@@ -572,11 +572,11 @@ impl HarrenVec {
     }
 
     unsafe fn ref_at<T>(&self, offset: usize) -> &T {
-        std::mem::transmute(&self.backing[offset])
+        unsafe { std::mem::transmute(&self.backing[offset]) }
     }
 
     unsafe fn mut_ref_at<T>(&mut self, offset: usize) -> &mut T {
-        std::mem::transmute(&mut self.backing[offset])
+        unsafe { std::mem::transmute(&mut self.backing[offset]) }
     }
 
     unsafe fn take_at<T>(&self, offset: usize) -> T {
@@ -584,8 +584,10 @@ impl HarrenVec {
 
         let ptr = &self.backing[offset] as *const u8 as *const T;
         let dest = result.as_mut_ptr();
-        dest.copy_from(ptr, 1);
-        result.assume_init()
+        unsafe {
+            dest.copy_from(ptr, 1);
+            result.assume_init()
+        }
     }
 
     #[cfg(not(feature = "no_drop"))]
@@ -743,7 +745,7 @@ impl HarrenVec {
     ///
     /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
     pub unsafe fn peek_unchecked<T: 'static>(&self) -> Option<&T> {
-        self.last_unchecked()
+        unsafe { self.last_unchecked() }
     }
 
     /// Alias of the [`Self::last_mut`] method.
@@ -761,7 +763,7 @@ impl HarrenVec {
     ///
     /// This method is only safe if the bytes can be safely interpreted as a struct of type `T`.
     pub unsafe fn peek_mut_unchecked<T: 'static>(&mut self) -> Option<&mut T> {
-        self.last_mut_unchecked()
+        unsafe { self.last_mut_unchecked() }
     }
 
     /// Return a reference to the item of the `HarrenVec` at
@@ -984,7 +986,7 @@ pub struct HarrenRefIter<'a> {
     vec: &'a HarrenVec,
 }
 
-impl<'a> HarrenRefIter<'a> {
+impl HarrenRefIter<'_> {
     /// Checks the type of the next item in the iterator
     /// without actually advancing it.
     ///
@@ -1068,7 +1070,7 @@ pub struct HarrenMutIter<'a> {
     vec: &'a mut HarrenVec,
 }
 
-impl<'a> HarrenMutIter<'a> {
+impl HarrenMutIter<'_> {
     /// Checks the type of the next item in the iterator
     /// without actually advancing it.
     ///
@@ -1457,8 +1459,8 @@ mod dropless_tests {
     use super::*;
 
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     struct DropCounter(Arc<AtomicUsize>);
@@ -1488,8 +1490,8 @@ mod droptests {
     use super::*;
 
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     struct DropCounter(Arc<AtomicUsize>);
